@@ -23,7 +23,10 @@ url = "https://github.com/cloudnative-pg/postgres-containers"
 extensions = [
   "pgaudit",
   "pgvector",
-  "pg-failover-slots"
+  "pg-failover-slots",
+  "cron",
+  "repack",
+  "partman"
 ]
 
 target "default" {
