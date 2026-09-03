@@ -2,7 +2,10 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "docker:pinDigests"
+    "docker:pinDigests",
+    ":gitSignOff",
+    ":automergeMinor",
+    ":automergeDigest"
   ],
   "enabledManagers": [
     "github-actions",
@@ -15,7 +18,8 @@
         "/docker-bake.hcl/"
       ],
       "matchStrings": [
-        "\\/\\/\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+(versioning=(?<versioning>.*?))?\\s+\"(?<depName>[^:]+):(?<currentValue>[^\\s@]+)(@(?<currentDigest>sha256:[0-9a-f]*))?\""
+        "\\/\\/\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+(versioning=(?<versioning>.*?))?\\s+\"(?<depName>[^:]+):(?<currentValue>[^\\s@]+)(@(?<currentDigest>sha256:[0-9a-f]*))?\"",
+        "\\/\\/\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+(versioning=(?<versioning>.*?))?\\s+depName=(?<depName>.*?)\\s*\\n\\s*[A-Za-z0-9_-]+\\s*=\\s*\"(?<currentValue>[^\"]+)\""
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
     }
@@ -32,6 +36,15 @@
         "action"
       ],
       "pinDigests": true
+    },
+    {
+      "matchDepTypes": [
+        "action"
+      ],
+      "matchPackageNames": [
+        "cloudnative-pg/postgres-containers"
+      ],
+      "pinDigests": false
     }
   ]
 }

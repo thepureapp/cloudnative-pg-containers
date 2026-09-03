@@ -1,0 +1,71 @@
+name: Bake Images
+
+on:
+  schedule:
+    # Build images once a week, on Mondays
+    - cron: 0 8 * * 1
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options:
+          - testing
+          - production
+        default: testing
+        description: "Choose the environment to bake the target for"
+
+permissions: {}
+
+jobs:
+  get_versions:
+    name: Get PostgreSQL versions
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      versions: ${{ steps.get_versions.outputs.versions }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Get supported PostgreSQL versions
+        id: get_versions
+        run: |
+          VERSIONS="$(sed -n '/postgreSQL\(Versions\|PreviewVersions\) = \[/,/\]/ s/.*"\([0-9][0-9]*\)[.~][^"]*".*/\1/p' docker-bake.hcl | sort -nu | paste -sd,)"
+          echo "PostgreSQL versions: [$VERSIONS]"
+          echo "versions=[$VERSIONS]" >> "$GITHUB_OUTPUT"
+
+  Bake:
+    name: Bake
+    needs: get_versions
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.get_versions.outputs.versions) }}
+    uses: ./.github/workflows/bake_targets.yml
+    with:
+      environment: ${{ github.event.inputs.environment }}
+      postgresql_version: ${{ matrix.version }}
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  Catalogs:
+    name: Update Catalogs
+    needs: Bake
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    if: |
+      github.ref == 'refs/heads/main' &&
+      ( github.event.inputs.environment == 'production' || github.event_name == 'schedule' )
+    steps:
+       - name: Repository Dispatch
+         uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697 # v4
+         with:
+           event-type: update-catalogs

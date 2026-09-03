@@ -20,6 +20,27 @@ now = timestamp()
 authors = "The CloudNativePG Contributors"
 url = "https://github.com/cloudnative-pg/postgres-containers"
 
+// PostgreSQL versions to build
+postgreSQLVersions = [
+  "14.24",
+  "15.19",
+  "16.15",
+  "17.11",
+  "18.6"
+]
+
+// PostgreSQL preview versions to build, such as "18~beta1" or "18~rc1"
+// Preview versions are automatically filtered out if present in the stable list
+// MANUALLY EDIT THE CONTENT - AND UPDATE THE README.md FILE TOO
+postgreSQLPreviewVersions = [
+  "19~beta3",
+]
+
+// Barman version to build
+// renovate: datasource=pypi versioning=loose depName=barman
+barmanVersion = "3.19.1"
+
+// Extensions to be included in the `standard` image
 extensions = [
   "pgaudit",
   "pgvector",
@@ -33,21 +54,18 @@ target "default" {
   matrix = {
     tgt = [
       "minimal",
-      "standard"
+      "standard",
+      "system"
     ]
-    pgVersion = [
-      "13.21",
-      "14.18",
-      "15.13",
-      "16.9",
-      "17.5",
-      "18~beta2"
-    ]
+    // Get the list of PostgreSQL versions, filtering preview versions if already stable
+    pgVersion = getPgVersions(postgreSQLVersions, postgreSQLPreviewVersions)
     base = [
       // renovate: datasource=docker versioning=loose
-      "debian:bookworm-slim@sha256:b1a741487078b369e78119849663d7f1a5341ef2768798f7b7406c4240f86aef",
+      "debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132",
       // renovate: datasource=docker versioning=loose
-      "debian:bullseye-slim@sha256:849d9d34d5fe0bf88b5fb3d09eb9684909ac4210488b52f4f7bbe683eedcb851"
+      "debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171",
+      // renovate: datasource=docker versioning=loose
+      "debian:bullseye-slim@sha256:e5b6442dd2e9684cf5e87d8338b5968f3b348636fc0be6d7850a381e3731a2bd"
     ]
   }
   platforms = [
@@ -56,11 +74,11 @@ target "default" {
   ]
   dockerfile = "Dockerfile"
   name = "postgresql-${index(split(".",cleanVersion(pgVersion)),0)}-${tgt}-${distroVersion(base)}"
-  tags = [
+  tags = concat([
     "${fullname}:${index(split(".",cleanVersion(pgVersion)),0)}-${tgt}-${distroVersion(base)}",
     "${fullname}:${cleanVersion(pgVersion)}-${tgt}-${distroVersion(base)}",
-    "${fullname}:${cleanVersion(pgVersion)}-${formatdate("YYYYMMDDhhmm", now)}-${tgt}-${distroVersion(base)}"
-  ]
+    "${fullname}:${cleanVersion(pgVersion)}-${formatdate("YYYYMMDDhhmm", now)}-${tgt}-${distroVersion(base)}",
+  ], (tgt == "system" && distroVersion(base) == "bullseye" && isPreview(pgVersion) == false) ? getRollingTags("${fullname}", pgVersion) : [])
   context = "."
   target = "${tgt}"
   args = {
@@ -68,7 +86,12 @@ target "default" {
     PG_MAJOR = "${getMajor(pgVersion)}"
     BASE = "${base}"
     EXTENSIONS = "${getExtensionsString(pgVersion, extensions)}"
+    STANDARD_ADDITIONAL_POSTGRES_PACKAGES = "${getStandardAdditionalPostgresPackagesPerMajorVersion(getMajor(pgVersion))}"
+    BARMAN_VERSION = "${barmanVersion}"
   }
+  output = [
+    "type=image,oci-mediatypes=true,oci-artifact=true",
+  ]
   attest = [
     "type=provenance,mode=max",
     "type=sbom"
@@ -82,10 +105,10 @@ target "default" {
     "index,manifest:org.opencontainers.image.vendor=${authors}",
     "index,manifest:org.opencontainers.image.title=CloudNativePG PostgreSQL ${pgVersion} ${tgt}",
     "index,manifest:org.opencontainers.image.description=A ${tgt} PostgreSQL ${pgVersion} container image",
-    "index,manifest:org.opencontainers.image.documentation=https://github.com/cloudnative-pg/postgres-containers",
+    "index,manifest:org.opencontainers.image.documentation=${url}",
     "index,manifest:org.opencontainers.image.authors=${authors}",
     "index,manifest:org.opencontainers.image.licenses=Apache-2.0",
-    "index,manifest:org.opencontainers.image.base.name=docker.io/library/${tag(base)}",
+    "index,manifest:org.opencontainers.image.base.name=docker.io/library/debian:${tag(base)}",
     "index,manifest:org.opencontainers.image.base.digest=${digest(base)}"
   ]
   labels = {
@@ -125,17 +148,52 @@ function cleanVersion {
     result = replace(version, "~", "")
 }
 
-function isBeta {
+function isPreview {
     params = [ version ]
-    result = length(regexall("[0-9]+~beta.*", version)) > 0
+    result = length(regexall("[0-9]+~(alpha|beta|rc).*", version)) > 0
 }
 
 function getMajor {
     params = [ version ]
-    result = (isBeta(version) == true) ? index(split("~", version),0) : index(split(".", version),0)
+    result = (isPreview(version) == true) ? index(split("~", version),0) : index(split(".", version),0)
 }
 
 function getExtensionsString {
     params = [ version, extensions ]
-    result = (isBeta(version) == true) ? "" : join(" ", formatlist("postgresql-%s-%s", getMajor(version), extensions))
+    result = (isPreview(version) == true) ? "" : join(" ", formatlist("postgresql-%s-%s", getMajor(version), extensions))
+}
+
+// This function conditionally adds recommended PostgreSQL packages based on
+// the version. For example, starting with version 18, PGDG moved `jit` out of
+// the main package and into a separate one.
+function getStandardAdditionalPostgresPackagesPerMajorVersion {
+    params = [ majorVersion ]
+    // Add PostgreSQL jit package from version 18
+    result = join(" ", [
+      majorVersion < 18 ? "" : format("postgresql-%s-jit", majorVersion)
+    ])
+}
+
+function isMajorPresent {
+  params = [major, pgVersions]
+  result = contains([for v in pgVersions : getMajor(v)], major)
+}
+
+function getPgVersions {
+  params = [stableVersions, previewVersions]
+  // Remove any preview version if already present as stable
+  result = concat(stableVersions,
+    [
+      for v in previewVersions : v
+      if !isMajorPresent(getMajor(v), stableVersions)
+    ]
+  )
+}
+
+function getRollingTags {
+    params = [ imageName, pgVersion ]
+    result = [
+      format("%s:%s", imageName, pgVersion),
+      format("%s:%s", imageName, getMajor(pgVersion))
+    ]
 }
